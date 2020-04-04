@@ -203,7 +203,7 @@ async def on_member_update(before, after):
 
         if after.status == discord.Status.offline and discord.utils.get(after.roles, id=storage[g.id].np_id) is not None: #has np_role
                 print(f'{before.display_name}[{g.name}] went offline')
-                await after.remove_roles(TTdiscord.utils.get(g.roles, id=storage[g.id].def_id))
+                await after.remove_roles(discord.utils.get(g.roles, id=storage[g.id].def_id))
                 print(f'Removed role')
 
 
