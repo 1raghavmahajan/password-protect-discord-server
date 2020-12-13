@@ -1,0 +1,25 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "open logs",
+            "type": "shell",
+            "command": "heroku logs --tail -a discord-password-bot",
+            "problemMatcher": []
+        },
+        {
+            "label": "stop worker",
+            "type": "shell",
+            "command": "heroku ps:scale worker=0 -a discord-password-bot",
+            "problemMatcher": []
+        },
+        {
+            "label": "start worker",
+            "type": "shell",
+            "command": "heroku ps:scale worker=1 -a discord-password-bot",
+            "problemMatcher": []
+        }
+    ]
+}
