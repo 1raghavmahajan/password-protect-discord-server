@@ -2,7 +2,9 @@
 
 import os
 import discord
-import pickle
+import urllib.parse as urlparse
+import json
+import redis
 
 DEFAULT_PASSWORD_CHANNEL_NAME = 'open-sesame'
 
@@ -10,6 +12,16 @@ DEFAULT_NP_ROLE = 'Needs Password'
 DEFAULT_ROLE = 'Default Role'
 
 TOKEN = os.environ['TOKEN']
+
+redis_url = urlparse.urlparse(os.environ.get('REDISCLOUD_URL'))
+redis_storage = redis.Redis(host=redis_url.hostname,
+                            port=redis_url.port,
+                            password=redis_url.password)
+
+# >>> r.set('foo', 'bar')
+# True
+# >>> r.get('foo')
+# 'bar'
 
 # on setup
 # create role "Needs Password"
@@ -31,15 +43,22 @@ class ServerData:
     def __str__(self):
         return f'id: {self.np_id}, def_id: {self.def_id}, channel_id: {self.channel_id}, pw: {self.pw}'
 
+    def toJson(self):
+        return json.dumps(self.__dict__)
+
+    @staticmethod
+    def fromStr(str):
+        return json.loads(str,
+                          object_hook=lambda dct: ServerData(
+                              dct['np_id'],
+                              dct['def_id'],
+                              dct['channel_id'],
+                              dct['pw'],
+                          ))
+
     def print(self, guild):
         return f'NP_Role_Name: {guild.get_role(self.np_id)}, Default_Role_Name: {guild.get_role(self.def_id)}, Password_Channel_Name: {guild.get_channel(self.channel_id)}, Password: {self.pw}'
 
-
-storage = {}
-try:
-    storage = pickle.load(open('serverdata', 'rb'))
-except:
-    pass
 
 client = discord.Client()
 
@@ -51,7 +70,7 @@ async def initialSetup(message):
     if len(ms) != 2:
         await message.channel.send(content='Invalid Parameters')
         return
-    if g.id in storage:
+    if redis_storage.get(g.id):
         await message.channel.send(content='Already Initialised')
         return
 
@@ -110,31 +129,32 @@ async def initialSetup(message):
     pw_channel = await g.create_text_channel(DEFAULT_PASSWORD_CHANNEL_NAME,
                                              position=0,
                                              overwrites=overwrites)
-    storage[g.id] = ServerData(np_role.id, def_role.id, pw_channel.id, ms[1])
+    redis_storage[g.id] = ServerData(np_role.id, def_role.id, pw_channel.id,
+                                     ms[1]).toJson()
 
     await message.delete()
     await message.channel.send(content='Done.')
-
-    pickle.dump(storage, open('serverdata', 'wb'))
 
 
 async def changeSetup(message):
     g = message.guild
     ms = message.content.split()
 
-    if g.id not in storage:
+    if redis_storage.get(g.id) is None:
         await message.channel.send(content='Bot not initialised')
         return
 
+    strg = ServerData.fromStr(redis_storage.get(g.id))
+
     if ms[1] == 'password' and len(ms) == 3:
-        storage[g.id].pw = ms[2]
+        strg.pw = ms[2]
         await message.channel.send(content="Password successfully changed")
         await message.delete()
     elif ms[1] == 'default_role':
         name = message.content[message.content.find('default_role') + 13:]
         role = discord.utils.get(g.roles, name=name)
         if role is not None and g.me.roles[-1] > role:
-            storage[g.id].def_id = role.id
+            strg.def_id = role.id
             await message.channel.send(
                 content=f'Changed Default Role to {role.name}')
         else:
@@ -143,7 +163,7 @@ async def changeSetup(message):
         name = message.content[message.content.find('np_role') + 8:]
         role = discord.utils.get(g.roles, name=name)
         if role is not None and g.me.roles[-1] > role:
-            storage[g.id].np_id = role.id
+            strg.np_id = role.id
             await message.channel.send(
                 content=f'Changed \'Needs Password\' role to {role.name}')
         else:
@@ -152,7 +172,7 @@ async def changeSetup(message):
         name = ms[2]
         channel = discord.utils.get(g.text_channels, name=name)
         if channel is not None:
-            storage[g.id].channel_id = channel.id
+            strg.channel_id = channel.id
             await message.channel.send(
                 content=f'Changed password channel to {channel.name}')
         else:
@@ -160,7 +180,7 @@ async def changeSetup(message):
     else:
         return
 
-    pickle.dump(storage, open('serverdata', 'wb'))
+    redis_storage[g.id] = strg.toJson()
 
 
 async def generateHelp(message):
@@ -194,8 +214,10 @@ async def on_ready():
         print(f'{guild.name}(id: {guild.id})')
         members = '\n - '.join([member.name for member in guild.members])
         print(f'Guild Members:\n - {members}')
-        if guild.id in storage:
-            print(f'Guild config:\n{storage[guild.id].print(guild)}')
+        if redis_storage.get(guild.id):
+            print(
+                f'Guild config:\n{ServerData.fromStr(redis_storage.get(guild.id)).print(guild)}'
+            )
         else:
             print('Guild not configured yet')
 
@@ -217,14 +239,15 @@ async def on_message(message):
         elif ms[0] == 'pps!help':
             await generateHelp(message)
 
-    if g.id in storage:
-        if message.channel.id == storage[g.id].channel_id:
-            if (message.content == storage[g.id].pw
-                    and discord.utils.get(message.author.roles,
-                                          id=storage[g.id].np_id) is not None):
+    if redis_storage.get(g.id):
+        strg = ServerData.fromStr(redis_storage.get(g.id))
+
+        if message.channel.id == strg.channel_id:
+            if (message.content == strg.pw and discord.utils.get(
+                    message.author.roles, id=strg.np_id) is not None):
                 await message.delete()
                 def_role = discord.utils.get(message.guild.roles,
-                                             id=storage[g.id].def_id)
+                                             id=strg.def_id)
                 if def_role is not None:
                     await message.author.add_roles(def_role)
                     print('added role')
@@ -237,30 +260,31 @@ async def on_message(message):
                 await message.delete()
 
         elif message.content == '!exit':
-            to_remove = discord.utils.get(message.author.roles,
-                                          id=storage[g.id].def_id)
+            to_remove = discord.utils.get(message.author.roles, id=strg.def_id)
             if (to_remove is not None):
                 await message.author.remove_roles(to_remove)
-                print(f'Removed role')
+                print('Removed role')
             await message.delete()
 
 
 @client.event
 async def on_member_update(before, after):
     g = before.guild
-    if g.id in storage and before.status != after.status:
-        channel = g.get_channel(storage[g.id].channel_id)
+    if redis_storage.get(g.id) and before.status != after.status:
+        strg = ServerData.fromStr(redis_storage.get(g.id))
+
+        channel = g.get_channel(strg.channel_id)
         deleted = await channel.purge(limit=100,
                                       check=lambda m: m.author == client.user)
         if len(deleted) > 0:
             print('Purged {} message(s)'.format(len(deleted)))
 
         if after.status == discord.Status.offline and discord.utils.get(
-                after.roles, id=storage[g.id].np_id) is not None:  #has np_role
+                after.roles, id=strg.np_id) is not None:  #has np_role
             print(f'{before.display_name}[{g.name}] went offline')
-            await after.remove_roles(
-                discord.utils.get(g.roles, id=storage[g.id].def_id))
-            print(f'Removed role')
+            await after.remove_roles(discord.utils.get(g.roles,
+                                                       id=strg.def_id))
+            print('Removed role')
 
 
 client.run(TOKEN)
