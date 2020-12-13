@@ -1,3 +1,4 @@
 {
-    "python.pythonPath": "E:\\Stuff\\Tensor\\djangular\\Scripts\\python.exe"
+    "python.pythonPath": "/home/roger/.pyenv/versions/discord-bot/bin/python",
+    "python.formatting.provider": "yapf"
 }
